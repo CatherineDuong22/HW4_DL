@@ -124,7 +124,7 @@ class TransformerPlanner(nn.Module):
         waypoints = self.output_proj(decoder_output)  # (b, n_waypoints, 2)
 
         return waypoints
-
+        
 class CNNPlanner(torch.nn.Module):
     def __init__(
         self,
@@ -137,18 +137,42 @@ class CNNPlanner(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
+        # CNN Backbone with LeakyReLU
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),  # (B, 16, 48, 64)
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), # (B, 32, 24, 32)
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), # (B, 64, 12, 16)
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # (B, 128, 6, 8)
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.AdaptiveAvgPool2d((1, 1)),  # (B, 128, 1, 1)
+        )
+
+        # Fully connected layers with LeakyReLU
+        self.fc = nn.Sequential(
+            nn.Flatten(),                   # (B, 128)
+            nn.Linear(128, 128),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(128, n_waypoints * 2)  # Final output
+        )
+
+
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
         Args:
-            image (torch.FloatTensor): shape (b, 3, h, w) and vals in [0, 1]
+            image (torch.FloatTensor): shape (B, 3, 96, 128) with values in [0, 1]
 
         Returns:
-            torch.FloatTensor: future waypoints with shape (b, n, 2)
+            torch.FloatTensor: predicted future waypoints with shape (B, n_waypoints, 2)
         """
-        x = image
-        x = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        x = (image - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        x = self.backbone(x)
+        x = self.fc(x)
+        x = x.view(-1, self.n_waypoints, 2)
+        return x
 
-        raise NotImplementedError
 
 
 MODEL_FACTORY = {
